@@ -1,0 +1,77 @@
+@startuml
+title Quy trình Hệ thống Dự đoán CTR (Thuật toán FTRL-Proximal)
+
+skinparam monochrome false
+skinparam packageStyle rect
+skinparam defaultFontName "Arial"
+
+package "Tầng Dữ liệu" {
+    [Dữ liệu gốc (.gz/.txt)] as RawData
+    [Bộ tải dữ liệu (CriteoDataLoader)] as Loader
+    [Bộ lặp luồng (StreamingIterator)] as Iterator
+}
+
+package "Luồng Tiền xử lý" {
+    [Xử lý giá trị thiếu] as MVH
+    [Biến đổi Log (Numerical)] as LogT
+    [Hashing Trick (Categorical)] as Hasher
+    [Bộ tiền xử lý tổng hợp] as MainPrep
+}
+
+package "Thuật toán Cốt lõi" {
+    card "FTRL-Proximal (Chính)" as FTRL
+    card "Online Logistic Regression (Cơ sở)" as OLR
+}
+
+package "Huấn luyện & Đánh giá" {
+    [Bộ huấn luyện luồng (StreamingTrainer)] as Trainer
+    [Theo dõi chỉ số (RunningMetrics)] as Metrics
+    [Bộ trực quan hóa (Visualizer)] as Viz
+}
+
+package "Kết quả đầu ra" {
+    [Mô hình đã huấn luyện (.pkl)] as ModelFile
+    [Biểu đồ hiệu năng (.png)] as Plots
+    [Đồ thị tương quan đặc trưng (.png)] as GraphImg
+}
+
+' --- Luồng thực thi ---
+
+RawData --> Loader : Đọc luồng dữ liệu (Hỗ trợ Gzip)
+Loader --> Iterator : Phân tách theo Batch/Mẫu
+Iterator --> MainPrep : Gửi bản ghi thô
+
+MainPrep --> MVH : 1. Điền/Xử lý giá trị thiếu
+MVH --> LogT : 2. Chuẩn hóa Log (Dữ liệu số)
+LogT --> Hasher : 3. Hashing Trick (Dữ liệu phân loại)
+Hasher --> Trainer : Chuyển thành Vector thưa {hash: giá trị}
+
+Trainer --> FTRL : Cập nhật trọng số (Học trực tuyến)
+Trainer --> OLR : Cập nhật mô hình so sánh
+
+FTRL --> Metrics : Tính toán Log-Loss / AUC
+Metrics --> Trainer : Tích lũy chỉ số theo thời gian thực
+
+Trainer --> ModelFile : Lưu trữ trọng số mô hình
+Trainer --> Viz : Truyền lịch sử huấn luyện
+Viz --> Plots : Xuất biểu đồ đường biểu diễn
+
+' Luồng phân tích đồ thị
+RawData --> [Phân tích tương quan đồ thị] : Lấy mẫu dữ liệu số
+[Phân tích tương quan đồ thị] --> GraphImg : Xuất bản đồ mạng lưới NetworkX
+
+note right of Hasher
+  **Hashing Trick**
+  Nén 1TB dữ liệu vào 
+  không gian cố định (2^18)
+  để tiết kiệm bộ nhớ RAM
+end note
+
+note bottom of FTRL
+  **Học trực tuyến (Online Learning)**
+  Mô hình học và cập nhật 
+  ngay khi có dữ liệu mới,
+  không cần nạp toàn bộ vào RAM.
+end note
+
+@enduml
