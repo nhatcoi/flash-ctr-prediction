@@ -20,8 +20,8 @@
 2. [Mô tả dữ liệu](#2-mô-tả-dữ-liệu)
 3. [Phương pháp giải quyết](#3-phương-pháp-giải-quyết)
 4. [Kiến trúc hệ thống](#4-kiến-trúc-hệ-thống)
-5. [Thực nghiệm và kết quả](#5-thực-nghiệm-và-kết-quả)
-6. [Kết luận](#6-kết-luận)
+5. [Kết quả thực nghiệm](#5-kết-quả-thực-nghiệm)
+6. [Kết luận & Hướng phát triển](#6-kết-luận--hướng-phát-triển)
 7. [Tài liệu tham khảo](#7-tài-liệu-tham-khảo)
 
 ---
@@ -160,51 +160,127 @@ Trong đó:
 
 ## 4. KIẾN TRÚC HỆ THỐNG
 
-### 4.1. Cấu trúc thư mục dự án
-```
-TTUD/
-├── data/
-│   ├── sample/          # Dữ liệu mẫu để test nhanh
-│   ├── day_2.gz         # Dữ liệu huấn luyện
-│   └── day_3.gz         # Dữ liệu kiểm thử
-├── src/
-│   ├── data/            # Module đọc và tiền xử lý dữ liệu
-│   ├── algorithms/      # Cài đặt FTRL và Online LR
-│   ├── training/        # Pipeline huấn luyện
-│   └── evaluation/      # Metrics và visualization
-├── models/              # Lưu trữ mô hình đã huấn luyện (.pkl)
-├── outputs/             # Biểu đồ kết quả
-├── main.py              # Entry point
-└── requirements.txt     # Thư viện cần cài đặt
-```
+Hệ thống được thiết kế theo **kiến trúc xử lý luồng (streaming pipeline)** với ba đặc tính then chốt cho bài toán dữ liệu 1TB:
 
-### 4.2. Các thành phần chính
-
-#### 4.2.1. CriteoDataLoader (`src/data/data_loader.py`)
-- Đọc dữ liệu theo luồng (streaming) từ file `.gz` mà không cần giải nén.
-- Hỗ trợ giới hạn số mẫu đọc (`max_samples`) để kiểm soát thời gian huấn luyện.
-
-#### 4.2.2. Preprocessor (`src/data/preprocessing.py`)
-- Kết hợp 3 bước: Missing Value → Log Transform → Feature Hashing.
-- Xuất ra dictionary thưa `{bucket_index: value}` cho mỗi bản ghi.
-
-#### 4.2.3. FTRLProximal (`src/algorithms/ftrl.py`)
-- Cài đặt đầy đủ thuật toán FTRL với các tham số: $\alpha$, $\beta$, $\lambda_1$, $\lambda_2$.
-- Hỗ trợ lưu/tải mô hình định dạng `.pkl`.
-
-#### 4.2.4. StreamingTrainer (`src/training/trainer.py`)
-- Điều phối quá trình huấn luyện và đánh giá.
-- Ghi log tiến trình theo thời gian thực với progress bar (tqdm).
-
-### 4.3. Sơ đồ quy trình xử lý
-
-[ Hình ảnh: Chèn ảnh render từ file `project_workflow.puml` - Có thể dùng PlantUML Online hoặc extension VSCode để xuất ảnh ]
+| Đặc tính | Mô tả |
+|----------|--------|
+| **Fixed-Memory** | Bộ nhớ sử dụng bị chặn bởi hằng số (số bucket, kích thước batch), không tăng theo dung lượng file hay số mẫu. |
+| **One-Pass** | Dữ liệu chỉ đi qua pipeline đúng một lần; không cần đọc lại toàn bộ dataset. |
+| **Online Learning** | Mô hình cập nhật từng mẫu một; kết quả cuối là file mô hình nhỏ (.pkl), không phải bản sao dữ liệu. |
 
 ---
 
-## 5. THỰC NGHIỆM VÀ KẾT QUẢ
+### 4.1. Tổng quan kiến trúc theo tầng
 
-### 5.1. Môi trường thực nghiệm
+Luồng xử lý đi qua bốn tầng chính:
+
+1. **Tầng dữ liệu:** Đọc file `.gz`/`.txt` theo luồng (CriteoDataLoader, StreamingIterator).
+2. **Tầng tiền xử lý:** Xử lý thiếu, log transform, Feature Hashing → vector thưa `{bucket: value}`.
+3. **Tầng thuật toán:** FTRL-Proximal (chính) và Online Logistic Regression (so sánh).
+4. **Tầng huấn luyện & đánh giá:** StreamingTrainer điều phối; RunningMetrics, Visualizer xuất biểu đồ; mô hình lưu `.pkl`.
+
+---
+
+### 4.2. Cấu trúc thư mục dự án
+
+```
+TTUD/
+├── data/
+│   ├── sample/          # Dữ liệu mẫu để test nhanh (.txt)
+│   ├── day_2.gz         # Dữ liệu huấn luyện (Criteo)
+│   └── day_3.gz         
+│   └── ........         
+├── src/
+│   ├── data/            # Đọc và tiền xử lý dữ liệu
+│   │   ├── data_loader.py    # CriteoDataLoader, StreamingIterator
+│   │   └── preprocessing.py  # Preprocessor (Missing, Log, Hashing)
+│   ├── algorithms/      # Thuật toán học
+│   │   ├── ftrl.py           # FTRL-Proximal
+│   │   └── online_logistic.py # Online LR (baseline)
+│   ├── training/        # Pipeline huấn luyện
+│   │   └── trainer.py        # StreamingTrainer
+│   └── evaluation/      # Đo lường và trực quan hóa
+│       ├── metrics.py       # RunningMetrics, log_loss, AUC
+│       ├── visualizer.py    # Biểu đồ training, so sánh sparsity
+│       └── graph_analysis.py # Phân tích đồ thị đặc trưng
+├── models/              # Mô hình đã huấn luyện (.pkl)
+├── outputs/             # Biểu đồ kết quả (.png)
+├── docs/                # Tài liệu (giai đoạn, slide, Q&A)
+├── main.py              # Entry point (--train, --evaluate, --compare, --demo)
+├── project_workflow.puml # Sơ đồ PlantUML quy trình hệ thống
+└── requirements.txt     # Thư viện Python
+```
+
+---
+
+### 4.3. Các thành phần chính
+
+#### 4.3.1. Tầng dữ liệu
+
+| Thành phần | File | Chức năng |
+|------------|------|-----------|
+| **CriteoDataLoader** | `src/data/data_loader.py` | Đọc file TSV/.gz theo batch; dùng `gzip.open` + `readline()` để không nạp toàn bộ vào RAM. |
+| **StreamingIterator** | `src/data/data_loader.py` | Lặp từng mẫu một (label, raw_features) phục vụ học trực tuyến; hỗ trợ `max_samples`. |
+
+**Luận điểm:** Độ phức tạp không gian tại bước đọc là $O(1)$ theo kích thước file — cho phép xử lý 1TB mà không tràn bộ nhớ.
+
+#### 4.3.2. Tầng tiền xử lý
+
+| Thành phần | File | Chức năng |
+|------------|------|-----------|
+| **Preprocessor** | `src/data/preprocessing.py` | (1) Điền giá trị thiếu (numerical: -1, categorical: `__MISSING__`); (2) Log transform cho cột số; (3) Feature Hashing → dict thưa `{bucket_index: value}` với $N = 2^{18}$ bucket. |
+
+**Luận điểm:** Không gian đặc trưng cố định $O(N)$; không cần từ điển ID → index, giải quyết High Cardinality.
+
+#### 4.3.3. Tầng thuật toán
+
+| Thành phần | File | Chức năng |
+|------------|------|-----------|
+| **FTRLProximal** | `src/algorithms/ftrl.py` | Cập nhật trạng thái $(z_i, n_i)$ theo từng mẫu; trọng số $w_i$ tính lazy từ $z, n$; L1/L2 → mô hình thưa; `save`/`load` `.pkl`. |
+| **OnlineLogisticRegression** | `src/algorithms/online_logistic.py` | SGD + L2, không sparsity; dùng để so sánh với FTRL. |
+
+#### 4.3.4. Tầng huấn luyện & đánh giá
+
+| Thành phần | File | Chức năng |
+|------------|------|-----------|
+| **StreamingTrainer** | `src/training/trainer.py` | Điều phối: StreamingIterator → Preprocessor → model.update(); tích lũy RunningMetrics; in sparsity theo `log_interval`; lưu/tải mô hình. |
+| **RunningMetrics** | `src/evaluation/metrics.py` | Log-Loss, Accuracy, AUC tích lũy theo thời gian thực. |
+| **Visualizer** | `src/evaluation/visualizer.py` | Vẽ đồ thị tiến trình huấn luyện, so sánh Log-Loss/Accuracy/Sparsity giữa FTRL và Online LR. |
+
+**Entry point:** `main.py` — lệnh `--train`, `--evaluate`, `--compare`, `--demo` gọi lần lượt train, evaluate, so sánh hai mô hình, và chạy demo với dữ liệu mẫu.
+
+---
+
+### 4.4. Luồng dữ liệu (Data Flow)
+
+```
+File .gz/.txt  →  CriteoDataLoader / StreamingIterator  →  từng dòng (raw)
+       →  Preprocessor (missing, log, hash)  →  vector thưa Dict[int, float]
+       →  FTRLProximal.update(features, label)  →  cập nhật z, n; tích lũy metrics
+       →  định kỳ: log sparsity, (tuỳ chọn) lưu .pkl
+       →  Visualizer nhận history  →  xuất biểu đồ (outputs/)
+```
+
+Đánh giá (evaluate): Load `.pkl` → đọc từng mẫu test → `model.predict(features)` (không update) → tính Log-Loss, Accuracy, AUC.
+
+---
+
+### 4.5. Sơ đồ quy trình xử lý
+
+Sơ đồ chi tiết các tầng và luồng dữ liệu được mô tả bằng PlantUML trong file `project_workflow.puml`.
+
+[ Hình ảnh: Chèn ảnh render từ file `project_workflow.puml` — dùng PlantUML (online hoặc extension VSCode) để xuất ảnh PNG. ]
+
+---
+
+## 5. KẾT QUẢ THỰC NGHIỆM
+
+Thực nghiệm được thiết kế để (1) đánh giá hiệu năng của **FTRL-Proximal** trên dữ liệu Criteo và (2) **so sánh với baseline** **Online Logistic Regression** (OLR). OLR cùng pipeline (streaming, Feature Hashing), dùng SGD + L2 nhưng **không có L1** nên mô hình **đặc** (sparsity 0%). So sánh này cho thấy lợi ích của FTRL về độ chính xác (Log-Loss) và tiết kiệm tài nguyên (sparsity).
+
+---
+
+### 5.1. Môi trường và thiết lập
+
 | Thông số        | Giá trị                          |
 |-----------------|----------------------------------|
 | **Hệ điều hành**| macOS                            |
@@ -213,22 +289,29 @@ TTUD/
 | **CPU**         | [ ... ]                          |
 | **Storage**     | NVME External SSD                |
 
-### 5.2. Tham số huấn luyện
-| Tham số         | Ký hiệu    | Giá trị   |
-|-----------------|------------|-----------|
-| Learning rate   | $\alpha$   | 0.1       |
-| Smoothing       | $\beta$    | 1.0       |
-| L1 Regularization | $\lambda_1$ | 1.0     |
-| L2 Regularization | $\lambda_2$ | 1.0     |
-| Hash buckets    | $N$        | $2^{18}$  |
+**Tham số huấn luyện (FTRL):**
 
-### 5.3. Kết quả huấn luyện (Training)
-**Lệnh chạy:**
+| Tham số           | Ký hiệu    | Giá trị   |
+|-------------------|------------|-----------|
+| Learning rate     | $\alpha$   | 0.1       |
+| Smoothing         | $\beta$    | 1.0       |
+| L1 Regularization| $\lambda_1$| 1.0       |
+| L2 Regularization| $\lambda_2$| 1.0       |
+| Hash buckets      | $N$        | $2^{18}$  |
+
+**Dữ liệu:** Train = `day_2.gz` (Criteo), Test = `day_3.gz`; cùng tiền xử lý (Preprocessor) cho cả FTRL và Online Logistic Regression.
+
+---
+
+### 5.2. Kết quả huấn luyện FTRL-Proximal
+
+**Lệnh:**
 ```bash
 python main.py --train --data data/day_2.gz --max-samples 1000000 --output models/ftrl_big.pkl
 ```
 
-**Kết quả:**
+**Kết quả trên tập train (1M mẫu):**
+
 | Chỉ số                  | Giá trị                          |
 |-------------------------|----------------------------------|
 | Số mẫu huấn luyện       | 1,000,000                        |
@@ -236,76 +319,97 @@ python main.py --train --data data/day_2.gz --max-samples 1000000 --output model
 | Tốc độ xử lý            | ~12,000 samples/giây             |
 | Log-Loss cuối cùng      | **0.1269**                       |
 | Accuracy                | **96.85%**                       |
-| Sparsity (Độ thưa)      | **87.75%** (30,881/252,170 non-zero) |
+| Sparsity (độ thưa)      | **87.75%** (30,881/252,170 non-zero) |
 
-[ Hình ảnh: Ảnh chụp màn hình Terminal khi chạy lệnh train - đã có trong lịch sử chat ]
+[ Hình ảnh: Ảnh chụp màn hình Terminal khi chạy lệnh train. ]
 
-### 5.4. Kết quả đánh giá (Evaluation)
-Sử dụng mô hình đã huấn luyện để đánh giá trên dữ liệu ngày tiếp theo (`day_3.gz`).
+---
 
-**Lệnh chạy:**
+### 5.3. Kết quả đánh giá trên tập test (FTRL)
+
+Mô hình FTRL đã huấn luyện được đánh giá trên dữ liệu ngày tiếp theo (`day_3.gz`) — không cập nhật trọng số, chỉ dự đoán.
+
+**Lệnh:**
 ```bash
 python main.py --evaluate --data data/day_3.gz --model models/ftrl_big.pkl --max-samples 200000
 ```
 
 **Kết quả:**
+
 | Chỉ số         | Giá trị   | Nhận xét                                      |
 |----------------|-----------|-----------------------------------------------|
-| **Log-Loss**   | **0.1169**| Thấp hơn cả khi train → Mô hình không overfit |
-| **Accuracy**   | **97.17%**| Độ chính xác rất cao                          |
+| **Log-Loss**   | **0.1169**| Thấp hơn train → mô hình không overfit        |
+| **Accuracy**   | **97.17%**| Độ chính xác cao                              |
 | **AUC**        | **0.7500**| Mức tốt cho bài toán CTR thực tế              |
 
-### 5.5. So sánh đối chứng (FTRL vs Online LR)
-**Lệnh chạy:**
+---
+
+### 5.4. So sánh FTRL-Proximal với Online Logistic Regression
+
+Để đánh giá vai trò của **L1 regularization** và **sparsity**, dự án sử dụng **Online Logistic Regression** (OLR) làm **baseline**: cùng luồng dữ liệu, cùng Feature Hashing, nhưng OLR chỉ dùng SGD + L2, không có L1 nên **không tạo sparsity** (mọi trọng số đã cập nhật đều khác 0). Hai mô hình được huấn luyện và đánh giá trong cùng điều kiện bằng lệnh so sánh:
+
+**Lệnh:**
 ```bash
 python main.py --compare --data data/day_2.gz --test-data data/day_3.gz --max-samples 200000 --plot
 ```
 
-**Bảng so sánh:**
-| Chỉ số         | FTRL-Proximal | Online LR   | Đơn vị      |
-|----------------|---------------|-------------|-------------|
-| Log-Loss       | **0.1139**    | 0.1189      | (thấp hơn tốt hơn) |
-| Accuracy       | 97.27%        | 97.27%      | %           |
-| Sparsity       | **~88%**      | 0%          | %           |
-| Số trọng số != 0 | ~30,000    | ~250,000    | weights     |
+**Bảng so sánh (cùng train 200k mẫu, đánh giá trên test 200k):**
 
-[ Hình ảnh: Biểu đồ so sánh Log-Loss và Accuracy - File `outputs/model_comparison.png` ]
+| Chỉ số              | FTRL-Proximal | Online Logistic Regression | Ghi chú        |
+|---------------------|---------------|----------------------------|----------------|
+| **Log-Loss**        | **0.1139**    | 0.1189                     | Thấp hơn = tốt hơn |
+| **Accuracy**        | 97.27%        | 97.27%                     | Tương đương   |
+| **Sparsity**        | **~88%**      | 0%                         | OLR không có L1 |
+| **Số trọng số ≠ 0** | ~30,000       | ~250,000                   | FTRL thưa hơn ~8× |
+
+[ Hình ảnh: Biểu đồ so sánh Log-Loss và Accuracy — file `outputs/model_comparison.png`. ]
 
 **Nhận xét:**
-1. **Log-Loss:** FTRL đạt giá trị thấp hơn, chứng tỏ dự đoán xác suất chính xác hơn.
-2. **Sparsity:** FTRL loại bỏ được ~88% trọng số không cần thiết, giúp mô hình nhẹ hơn **8 lần** so với Online LR.
-3. **Ý nghĩa thực tiễn:** Với cùng độ chính xác, FTRL tiết kiệm bộ nhớ và tăng tốc độ inference đáng kể.
 
-### 5.6. Biểu đồ trực quan
-
-[ Hình ảnh: Biểu đồ Log-Loss theo thời gian huấn luyện - Nếu có trong `outputs/` ]
-
-[ Hình ảnh: Biểu đồ Sparsity so sánh - Nếu có trong `outputs/` ]
+1. **Log-Loss:** FTRL-Proximal đạt **thấp hơn** OLR (0.1139 vs 0.1189), cho thấy dự đoán xác suất click chính xác hơn nhờ cơ chế proximal và per-coordinate learning rate.
+2. **Sparsity:** FTRL tạo mô hình **thưa** (~88% trọng số bằng 0); Online Logistic Regression **không có sparsity** (0%), nên số trọng số khác 0 lớn hơn khoảng **8 lần**. Điều này thể hiện rõ lợi ích của việc sử dụng OLR làm baseline để so sánh.
+3. **Ý nghĩa thực tiễn:** Cùng mức Accuracy, FTRL vừa cải thiện Log-Loss vừa giảm đáng kể dung lượng mô hình và tăng tốc inference, phù hợp triển khai production.
 
 ---
 
-## 6. KẾT LUẬN
+### 5.5. Biểu đồ trực quan
 
-### 6.1. Kết quả đạt được
-Dự án đã hoàn thành các mục tiêu đề ra:
+[ Hình ảnh: Biểu đồ Log-Loss theo thời gian huấn luyện — `outputs/` (nếu có). ]
 
-1. ✅ **Xử lý dữ liệu quy mô Terabyte:** Hệ thống sử dụng Hashing Trick để nén hàng triệu đặc trưng vào không gian $2^{18}$, cho phép huấn luyện dữ liệu 1TB trên máy tính cá nhân mà không bị tràn RAM.
+[ Hình ảnh: Biểu đồ so sánh Sparsity FTRL vs Online Logistic Regression — `outputs/`. ]
 
-2. ✅ **Huấn luyện mô hình chính xác cao:** Thuật toán FTRL-Proximal đạt Log-Loss ~0.11 và Accuracy ~97%, đạt tiêu chuẩn công nghiệp cho bài toán CTR.
+---
 
-3. ✅ **Tối ưu tài nguyên:** Mô hình FTRL có Sparsity ~88%, giúp giảm kích thước lưu trữ và tăng tốc độ dự đoán, phù hợp cho hệ thống xử lý thời gian thực.
+## 6. KẾT LUẬN & HƯỚNG PHÁT TRIỂN
 
-### 6.2. Ưu điểm của giải pháp
-- **Online Learning:** Có thể cập nhật mô hình liên tục mà không cần huấn luyện lại từ đầu.
-- **Scalability:** Kiến trúc streaming cho phép mở rộng xử lý dữ liệu lớn hơn nữa.
-- **Interpretability:** Mô hình thưa giúp dễ dàng phân tích các feature quan trọng.
+### 6.1. Kết luận
 
-### 6.3. Hạn chế và hướng phát triển
-| Hạn chế                            | Hướng phát triển                              |
-|------------------------------------|-----------------------------------------------|
-| Chưa xử lý Feature Interactions    | Thêm Poly2 hoặc FM (Factorization Machines)   |
-| Chưa tối ưu hyperparameters        | Áp dụng Grid Search hoặc Bayesian Optimization|
-| Chỉ chạy trên 1 máy                | Song song hóa với Apache Spark hoặc Ray      |
+Dự án đã đạt được các mục tiêu đề ra:
+
+| Mục tiêu | Kết quả |
+|----------|---------|
+| **Xử lý dữ liệu quy mô lớn** | Streaming + Feature Hashing ($2^{18}$ bucket) → bộ nhớ cố định, có thể huấn luyện trên dữ liệu 1TB mà không tràn RAM. |
+| **Mô hình chính xác** | FTRL-Proximal đạt Log-Loss ~0,11–0,13 và Accuracy ~97% trên Criteo; đánh giá trên day_3 cho thấy không overfit. |
+| **Tối ưu tài nguyên** | Sparsity ~88% (so sánh với Online Logistic Regression 0%) → mô hình nhẹ hơn ~8 lần, inference nhanh, phù hợp triển khai thực tế. |
+
+**Ưu điểm chính của giải pháp:**
+
+- **Online Learning:** Cập nhật mô hình từng mẫu; có thể học tiếp (incremental) từ file `.pkl` mà không train lại từ đầu.
+- **Scalability:** Kiến trúc one-pass, fixed-memory cho phép mở rộng sang dữ liệu lớn hơn.
+- **So sánh có căn cứ:** Sử dụng Online Logistic Regression làm baseline cùng pipeline → làm rõ lợi ích của FTRL (Log-Loss thấp hơn, sparsity cao).
+
+---
+
+### 6.2. Hướng phát triển
+
+| Hạn chế hiện tại | Hướng phát triển đề xuất |
+|------------------|---------------------------|
+| **Chưa mô hình hóa tương tác đặc trưng (feature interactions)** | Bổ sung Poly2, FM (Factorization Machines) hoặc Deep & Wide để nắm bắt tương tác cặp (user–ad, v.v.). |
+| **Hyperparameters (α, β, λ₁, λ₂) chọn thủ công** | Grid Search, Random Search hoặc Bayesian Optimization trên tập validation. |
+| **Chạy đơn luồng trên một máy** | Song song hóa: Spark MLlib, Ray, hoặc phân tán FTRL trên nhiều worker. |
+| **Chưa xử lý concept drift một cách tường minh** | Giám sát Log-Loss/AUC theo thời gian; điều chỉnh learning rate hoặc retrain định kỳ khi performance suy giảm. |
+
+**Tóm tắt:** Dự án chứng minh có thể xây dựng hệ thống dự đoán CTR theo kiến trúc streaming + FTRL-Proximal trên dữ liệu Criteo quy mô lớn, với kết quả so sánh rõ ràng so với Online Logistic Regression. Các bước tiếp theo tập trung vào tương tác đặc trưng, tối ưu tham số và mở rộng quy mô tính toán.
 
 ---
 
